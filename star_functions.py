@@ -237,6 +237,132 @@ class AdditiveWorkFlow():
         np.savetxt(filename,self.phase_points,delimiter=',')
         print('Data has been saved to', filename)
 
+
+
+
+
+
+class AdditiveWorkFlow_negative_chi():
+    def __init__(self,chiAB, chiAS,chiAC,chiBC,chiSC, polymer_type,Nlist,arms = 5, n_copper = 5):
+        # intitializes system and computes the form factors (only do this once for a given system)
+        species_to_index = {'A':0,'B':1,'S':2, 'C':3}
+        charge_to_index = {0:0}
+        
+        N = sum(Nlist)
+        print('N =', N)
+        specieslist = ['A','B']
+        chargelist = [0, 0]
+        Glist = []
+        Glist.append(create_salt_solvent(0,'S'))
+        Glist.append(create_salt_solvent(0,'C'))
+
+        if polymer_type == 'linear':
+            Glist.append(create_block_copolymer(Nlist,specieslist,chargelist))
+        elif polymer_type == 'star':
+            Glist.append(create_copolymer_star(Nlist[0],Nlist[1],arms))
+        elif polymer_type == 'miktoarm':
+            Glist.append(create_miktoarm_copolymer(Nlist[0],Nlist[1],Nlist[2], arms))
+        elif polymer_type == 'aggregate':
+            Glist.append(create_copolymer_aggregate(Nlist[0],Nlist[1],arms,n_copper))
+        self.Glist = Glist
+        self.species_to_index = species_to_index
+        self.charge_to_index = charge_to_index
+        phi_list = [1/len(Glist)]*len(Glist)
+        blist = [1.0, 1.0, 1.0,1.0]
+        self.ChainTracker = TrackChains(Glist,phi_list,species_to_index,charge_to_index)
+        self.bLoops = self.ChainTracker.check_loops()
+        if not self.bLoops:
+            raise Exception("Loops are not supported")
+        self.karray = np.linspace(0.001,5,100)
+        bondtype = compute_bond_transition_dgc
+        phi_matrix = create_bond_transition(self.karray, blist, bondtype, self.ChainTracker)
+        self.Flist = []
+        for i in range(len(Glist)):
+            self.Flist.append(universal_compute_form_factor(Glist[i],self.karray,phi_matrix,self.ChainTracker))
+        
+        
+        # initialize interactions
+        self.zeta = 1e5
+        self.a_i = 0.0
+        self.Nref = 1
+        self.chiAB = chiAB
+        self.chiAS = chiAS
+        self.chiAC = chiAC
+        self.chiBC = chiBC
+        self.chiSC = chiSC
+        self.phase_points = []
+    # Draws the system
+    def DrawSystem(self):
+        fig = DrawSystem(self.Glist, self.species_to_index,'species')
+        return fig
+
+    # Update chiAb or chias
+    def set_chi(self,chiAB,chiAS,chiAC,chiBC,chiSC):
+        self.chiAB = chiAB
+        self.chiAS = chiAS
+        self.chiAC = chiAC
+        self.chiBC = chiBC
+        self.chiSC = chiSC
+
+    # run a single point
+    def run_single(self,chiBS,phiS,phiC):
+        phiP = 1-phiS-phiC
+        phiS = [phiS,phiC,phiP]
+        self.ChainTracker.update_phi(phiS)
+        Ftemp = self.ChainTracker.downsizeFlist(self.Flist)
+        phitemp = self.ChainTracker.return_list(phiS)
+        F = Assemble_F(phitemp,Ftemp,self.ChainTracker.getNlist(),self.Nref)
+        interactions = []
+        interactions.append({'type':'chi',0:'A',1:'B','value':self.chiAB,'smear_length':self.a_i})
+        interactions.append({'type':'chi',0:'A',1:'S','value':self.chiAS,'smear_length':self.a_i})
+        interactions.append({'type':'chi',0:'B',1:'S','value':chiBS,'smear_length':self.a_i})
+        interactions.append({'type':'chi',0:'A',1:'C','value':self.chiAC,'smear_length':self.a_i})
+        interactions.append({'type':'chi',0:'B',1:'C','value':self.chiBC,'smear_length':self.a_i})
+        interactions.append({'type':'chi',0:'S',1:'C','value':self.chiSC,'smear_length':self.a_i})
+        interactions.append({'type':'zeta','value':self.zeta,'smear_length':self.a_i})
+        U = return_interaction_matrix(self.ChainTracker,interactions,self.karray)*self.Nref
+        Sinv = np.linalg.inv(F)+U
+        self.ChainTracker.restore()
+        phase = checkphase(np.linalg.det(Sinv))
+        return phase
+    #run a list of points
+    def run(self, phi_list, chiBS_list,phiC ):
+        self.phase_points = []
+        for i, chiBS in enumerate(chiBS_list):
+            for j, phiS in enumerate(phi_list):
+                phase = self.run_single(chiBS,phiS,phiC)
+                self.phase_points.append([phiS,chiBS,phase])
+        self.phase_points = np.vstack(self.phase_points)
+        return self.phase_points
+    # plot the phase diagram
+    def plot_phase_diagram(self,phiC,fontsize = 20):
+        plt.figure(figsize = (6,6))
+        label = ['DIS','Macro','Micro']
+        for i in range(0,3):
+            loc = np.where(self.phase_points[:,-1] == i)[0]
+            if len(loc)==0:
+                continue
+            plt.scatter(1 - self.phase_points[:,0][loc],self.phase_points[:,1][loc],label =label[i])
+        plt.legend(fontsize = fontsize,bbox_to_anchor=[0.5, 0.5])
+        plt.ylabel(r'$\chi_{BS}$',fontsize = fontsize)
+        plt.xlabel(r'$\phi_P$',fontsize = fontsize)
+        plt.xticks(fontsize = fontsize-1)
+        plt.yticks(fontsize = fontsize-1)
+    #export data
+    def export_data(self,filename):
+        np.savetxt(filename,self.phase_points,delimiter=',')
+        print('Data has been saved to', filename)
+
+
+
+
+
+
+
+
+
+
+
 def find_phase_boundaries(compositions,b_allboundary = True,class_1 = 0,class_2 = 1):
     # Extract compositions and classifications
     compositions_xy = compositions[:, :-1]
